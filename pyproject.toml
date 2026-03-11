@@ -1,0 +1,28 @@
+[project]
+name = "sql-commander"
+version = "0.1.0"
+description = "SQL command-line tool"
+authors = [
+    {name = "Nicko"}
+]
+requires-python = ">=3.10,<4.0"
+dependencies = [
+    "cmd2 (>=3.4.0,<4.0.0)",
+    "lupa (>=2.6,<3.0)",
+    "oracledb (>=3.4.2,<4.0.0)",
+    "psycopg[binary] (>=3.3.3,<4.0.0)",
+    "prettytable (>=3.17.0,<4.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+sql-cmd = "sql_commander.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest (>=9.0.2,<10.0.0)"
+]
