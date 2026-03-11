@@ -1,9 +1,9 @@
 class PseudoViews:
     VIEWS = {
-        "ORACLE": {
+        "oracle": {
             "<USERS>": "(SELECT username as username, CASE WHEN account_status IN ('OPEN', 'EXPIRED(GRACE)') THEN 1 ELSE 0 END as can_login FROM DBA_USERS)"
         },
-        "POSTGRESQL": {
+        "postgresql": {
             "<USERS>": "(SELECT rolname as username, CASE WHEN rolcanlogin THEN 1 ELSE 0 END as can_login FROM PG_ROLES)"
         }
     }

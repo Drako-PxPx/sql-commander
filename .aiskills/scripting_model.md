@@ -27,12 +27,31 @@ To implement vendor-specific operations, use the `db_` class pattern. This enabl
 - **Naming:** All specific logic classes must start with the `db_` prefix.
 - **Methods:** Each class must define a method named after the RDBMS (e.g., `:ORACLE`, `:POSTGRESQL`).
 - **Internal State:** Each method must set a `self.command` string attribute containing the actual SQL to be executed.
-- **Execution (`go()`):** The tool's Lua runtime provides a non-declared function `go()` that acts as an orchestrator. When `db_Example:go(...)` is called:
-  1. It detects the active DBMS type.
+- **Execution (`go()`):** The tool's Lua runtime provides a non-declared function `go(...)` as an orchestrator:
+  1. It detects the active DBMS type (e.g., `ORACLE`).
   2. It invokes the matching method (e.g., `:ORACLE`) passing any provided arguments.
   3. It automatically executes the resulting `self.command`.
 
-### Example
+### rdbms() function
+Used for "Side-effect" SQL commands (e.g., `ALTER SESSION`, `EXPLAIN PLAN`, `BEGIN...END`).
+- **Return:** None.
+- **Error:** Script execution halts if the RDBMS returns an error.
+- **Example:** `rdbms("BEGIN GATHER_STATS('HR'); END;")`
+
+### Agnostic Cursors (SQL Macro Syntax)
+Agnostic cursors use `[name(args)]` within a `SQL` instruction. The engine uses a **Discovery Rule** to locate and execute the correct logic at runtime.
+
+#### Discovery Rule
+1. When the engine encounters `[view_name(args)]` in a `SQL` statement:
+2. It scans all Lua tables starting with `db_` in the global scope.
+3. It searches for a method named `vw_<view_name>_<active_vendor>` (e.g., `vw_usage_oracle`).
+4. It executes that method, passing the provided arguments.
+5. The method is expected to set `self.command`.
+6. The engine replaces the `[...]` block with the value of `self.command` before executing the full query.
+
+### Examples
+
+#### Basic Dispatch
 ```lua
 db_CreateUser = {command = ""}
 
@@ -44,8 +63,25 @@ function db_CreateUser:POSTGRESQL(user)
   self.command = string.format("CREATE USER %s", user)
 end
 
--- Call using the automatic orchestrator
 db_CreateUser:go("nicko")
+```
+
+#### Agnostic View with Procedural Pre-step
+```lua
+db_Performance = {command = ""}
+
+function db_Performance:vw_execplan_oracle(sqlstmt)
+  -- Side effect: populate plan_table
+  rdbms(string.format("explain plan for %s", sqlstmt))
+  self.command = "SELECT plan_table_output as plan FROM TABLE(DBMS_XPLAN.DISPLAY)"
+end
+
+function db_Performance:vw_execplan_postgresql(sqlstmt)
+  self.command = "EXPLAIN " .. sqlstmt
+end
+
+-- Agnostic usage in SQL
+SQL SELECT * FROM [execplan("select * from dual")]
 ```
 
 ---

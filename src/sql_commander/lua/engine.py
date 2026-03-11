@@ -13,9 +13,12 @@ class LuaEngine:
         self._register_globals()
 
     def _register_globals(self):
-        # Register __sql_execute
+        # Register core bridges
         self.lua.globals()['__sql_execute'] = self.__sql_execute
-        self.lua.globals()['__get_vendor'] = lambda: self.db.vendor
+        self.lua.globals()['__get_vendor'] = lambda: self.db.vendor.lower()
+        
+        # rdbms() function for non-returning SQL
+        self.lua.globals()['rdbms'] = self.__rdbms_execute
         
         # Inject the db_ pattern orchestrator code snippet
         orchestrator_lua = """
@@ -83,36 +86,78 @@ class LuaEngine:
         # String as fallback
         return val_str
 
+    def __rdbms_execute(self, sql: str):
+        if not self.db.conn:
+            raise Exception("Not connected to a database")
+        try:
+            self.db.execute_query(sql)
+        except Exception as e:
+            # Re-raise to halt Lua execution
+            raise Exception(f"RDBMS Error: {e}")
+
     def __sql_execute(self, sql_statement: str, args_table: Optional[Any] = None, is_single_value_output: bool = False):
         if not self.db.vendor:
             raise Exception("Cannot execute SQL: Not connected to a database.")
             
         params = {}
         if args_table:
-            # Extract items from Lua table wrapper
             for k in args_table:
                 params[k] = args_table[k]
                 
-        # 1. Rewrite pseudo views (e.g. <USERS>)
-        vendor_sql = PseudoViews.rewrite(sql_statement, self.db.vendor)
+        # 1. Agnostic Cursor Replacement ([view(args)])
+        # Pattern matches [view_name(optional_args)]
+        vendor_sql = sql_statement
+        agnostic_matches = re.findall(r'\[(\w+)\((.*?)\)\]', vendor_sql)
+        
+        for view_name, raw_args in agnostic_matches:
+            target_method = f"vw_{view_name}_{self.db.vendor.lower()}"
+            found_command = None
+            
+            # Search db_ objects in Lua global scope
+            for key in self.lua.globals():
+                if isinstance(key, str) and key.startswith("db_"):
+                    lua_table = self.lua.globals()[key]
+                    if target_method in lua_table:
+                        # Parse args into Lua values using a temporary table/expression
+                        try:
+                            # Use a function call bridge to pass arguments safely
+                            lua_args = self.lua.eval(f"function(...) return ... end")({raw_args}) # Simplified for now
+                            # More robust: use eval with a table wrapper
+                            if raw_args.strip() == "":
+                                method_args = []
+                            else:
+                                method_args = self.lua.eval(f"{{ {raw_args} }}")
+                                # method_args is a lupa table, convert to list if it's an array part
+                                if hasattr(method_args, 'values') and callable(method_args.values):
+                                    method_args = list(method_args.values())
+                                else:
+                                    method_args = [method_args]
+                            
+                            # Execute the method
+                            lua_table[target_method](lua_table, *method_args)
+                            found_command = lua_table["command"]
+                            break
+                        except Exception as e:
+                            raise Exception(f"Error executing agnostic view {view_name}: {e}")
+            
+            if found_command:
+                vendor_sql = vendor_sql.replace(f"[{view_name}({raw_args})]", found_command)
+            else:
+                raise Exception(f"Agnostic view method '{target_method}' not found in any db_ object.")
 
-        # 2. Variable expansion for SQL "IN" clauses
-        # Scan for $variable_name and check if it's a table/list
+        # 2. Rewrite pseudo views (e.g. <USERS>)
+        vendor_sql = PseudoViews.rewrite(vendor_sql, self.db.vendor)
+
+        # 3. Variable expansion for SQL "IN" clauses
         for var_name in list(params.keys()):
             val = params[var_name]
-            
-            # Check for list-like objects (Python list or lupa table wrapper)
             is_list = isinstance(val, (list, tuple))
             if not is_list and hasattr(val, 'values') and callable(val.values):
-                # Probably a lupa table
                 is_list = True
                 
             if is_list:
-                # Format as SQL list: (item1, item2, ...)
                 items = []
-                # If it's a lupa table, we can iterate over values
                 val_iterator = val.values() if hasattr(val, 'values') and callable(val.values) else val
-                
                 for item in val_iterator:
                     if isinstance(item, str):
                         items.append(f"'{item}'")
@@ -121,40 +166,30 @@ class LuaEngine:
                     else:
                         items.append(str(item))
                 
-                if not items:
-                    formatted_list = "(NULL)" # SQL safety for empty lists
-                else:
-                    formatted_list = "(" + ", ".join(items) + ")"
-                
-                # Replace $var in SQL with literal list and remove from bind params
+                formatted_list = "(" + (", ".join(items) if items else "NULL") + ")"
                 vendor_sql = vendor_sql.replace(f"${var_name}", formatted_list)
                 del params[var_name]
         
-        # 3. Rewrite remaining script bind variables ($var) to driver-specific placeholders
-        if self.db.vendor == "ORACLE":
+        # 4. Driver-specific placeholders
+        if self.db.vendor == "oracle":
             vendor_sql = re.sub(r'\$([a-zA-Z_]\w*)', r':\1', vendor_sql)
-        elif self.db.vendor == "POSTGRESQL":
+        elif self.db.vendor == "postgresql":
             vendor_sql = re.sub(r'\$([a-zA-Z_]\w*)', r'%(\1)s', vendor_sql)
             
-        # 4. Execute
+        # 5. Execute
         results = self.db.execute_query(vendor_sql, params)
         
-        # 5. Handle Save Output
+        # 6. Handle Save Output
         if is_single_value_output:
             if not results or isinstance(results, int):
                 return None
             first_row = results[0]
-            if not first_row:
-                return None
-            # Return first column of first row
-            return list(first_row.values())[0]
+            return list(first_row.values())[0] if first_row else None
             
-        # 6. Handle cursor return (List of Dicts mapped to Lua Tables)
-        # Return row count integer for DML/DDL operations
+        # 7. Cursor return (List of Dicts mapped to Lua Tables)
         if isinstance(results, int):
             return results
 
-        # Deep map to Lua tables so `ipairs` and typical Lua patterns work correctly
         lua_table = self.lua.eval("{}")
         for i, row in enumerate(results, start=1):
             row_table = self.lua.eval("{}")
@@ -165,12 +200,10 @@ class LuaEngine:
         return lua_table
 
     def execute_script(self, script_content: str, params: Optional[Dict[str, str]] = None):
-        # Inject parameters if provided
         if params:
             for k, v in params.items():
                 val = self._infer_type(v)
                 if isinstance(val, list):
-                    # Convert to native Lua table
                     self.lua.globals()[k] = self.lua.table_from(val)
                 else:
                     self.lua.globals()[k] = val
