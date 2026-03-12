@@ -7,6 +7,7 @@ class MockDB(DBConnection):
         super().__init__()
         self.vendor = vendor
         self.queries = []
+        self.conn = True
         
     def execute_query(self, sql, params=None):
         self.queries.append((sql, params))
@@ -46,6 +47,21 @@ def test_engine_sql_execute_postgres():
     assert sql == "SELECT can_login FROM (SELECT rolname as username, CASE WHEN rolcanlogin THEN 1 ELSE 0 END as can_login FROM PG_ROLES) WHERE username = %(my_user)s"
     assert params["my_user"] == "admin"
     assert engine.lua.globals().can_login == 1
+
+def test_engine_sql_execute_tables_oracle():
+    db = MockDB("ORACLE")
+    engine = LuaEngine(db)
+    
+    script = """
+    local schema = 'SYS'
+    SQL SELECT table_name FROM <TABLES> WHERE owner = $schema
+    """
+    engine.execute_script(script)
+    
+    assert len(db.queries) == 1
+    sql, params = db.queries[0]
+    assert sql == "SELECT table_name FROM (SELECT OWNER as owner, TABLE_NAME as table_name FROM DBA_TABLES) WHERE owner = :schema"
+    assert params["schema"] == "SYS"
 
 def test_engine_return_table():
     db = MockDB("ORACLE")
@@ -87,3 +103,35 @@ def test_db_pattern_orchestration():
     assert len(db.queries) == 1
     sql, params = db.queries[0]
     assert sql == "SELECT 1"
+
+def test_engine_sql_exists():
+    db = MockDB("ORACLE")
+    engine = LuaEngine(db)
+    
+    script = """
+    local var = 123
+    local exists = sql_exists("SELECT * FROM USERS WHERE id = $var")
+    is_existing = exists
+    """
+    
+    engine.execute_script(script)
+    
+    assert len(db.queries) == 1
+    sql, params = db.queries[0]
+    assert sql == "SELECT * FROM USERS WHERE id = :var"
+    assert params["var"] == 123
+    assert engine.lua.globals().is_existing == True
+
+def test_engine_sql_exists_not_found():
+    db = MockDB("ORACLE")
+    db.execute_query = lambda sql, params=None: []
+    engine = LuaEngine(db)
+    
+    script = """
+    local var = 456
+    local exists = sql_exists("SELECT * FROM USERS WHERE id = $var")
+    is_existing = exists
+    """
+    
+    engine.execute_script(script)
+    assert engine.lua.globals().is_existing == False

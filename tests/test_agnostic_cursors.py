@@ -63,6 +63,23 @@ def test_agnostic_cursor_multiple_args():
     assert len(db.queries) == 1
     assert db.queries[0][0] == "SELECT 1 + 2"
 
+def test_agnostic_cursor_case_insensitive():
+    db = MockDB("POSTGRESQL")
+    engine = LuaEngine(db)
+    
+    script = """
+    db_Test = { command = "" }
+    function db_Test:vw_case_POSTGRESQL()
+        self.command = "SELECT 'case ok'"
+    end
+    
+    SQL [case()]
+    """
+    engine.execute_script(script)
+    
+    assert len(db.queries) == 1
+    assert db.queries[0][0] == "SELECT 'case ok'"
+
 def test_agnostic_cursor_missing_method_error():
     db = MockDB("POSTGRESQL")
     engine = LuaEngine(db)

@@ -20,6 +20,9 @@ class LuaEngine:
         # rdbms() function for non-returning SQL
         self.lua.globals()['rdbms'] = self.__rdbms_execute
         
+        # sql_exists() function for checking if SQL statement returns rows
+        self.lua.globals()['sql_exists'] = self.__sql_exists_execute
+        
         # Inject the db_ pattern orchestrator code snippet
         orchestrator_lua = """
         function _init_orchestrator()
@@ -30,7 +33,7 @@ class LuaEngine:
                         if vendor == nil then
                             error("Not connected to a database")
                         end
-                        local method = self[vendor]
+                        local method = self[vendor] or self[string.upper(vendor)] or self["any"] or self["ANY"]
                         if method then
                             method(self, ...)
                             if self.command and self.command ~= "" then
@@ -95,6 +98,43 @@ class LuaEngine:
             # Re-raise to halt Lua execution
             raise Exception(f"RDBMS Error: {e}")
 
+    def __sql_exists_execute(self, sql_statement: str, args_table: Optional[Any] = None) -> bool:
+        if not self.db.conn:
+            raise Exception("Not connected to a database")
+            
+        try:
+            # 1. Extract variables from sql_statement
+            extracted_vars = re.findall(r'[\$&]([a-zA-Z_]\w*)', sql_statement)
+            
+            # 2. Get values (from args_table or Lua globals)
+            args_dict = {}
+            for v in extracted_vars:
+                if args_table and v in args_table:
+                    args_dict[v] = args_table[v]
+                elif v in self.lua.globals():
+                    args_dict[v] = self.lua.globals()[v]
+                else:
+                    raise Exception(f"Variable '{v}' not found in arguments or Lua global scope")
+            
+            # 3. Delegate to __sql_execute
+            results = self.__sql_execute(sql_statement, args_table=args_dict, is_single_value_output=False)
+            
+            if isinstance(results, int):
+                return results > 0
+                
+            if not results:
+                return False
+                
+            # results is a Lupa table mapped with indices 1..N
+            # We can check if index 1 exists to see if any rows were returned
+            try:
+                return results[1] is not None
+            except KeyError:
+                return False
+                
+        except Exception as e:
+            raise Exception(f"{e}")
+
     def __sql_execute(self, sql_statement: str, args_table: Optional[Any] = None, is_single_value_output: bool = False):
         if not self.db.vendor:
             raise Exception("Cannot execute SQL: Not connected to a database.")
@@ -110,14 +150,28 @@ class LuaEngine:
         agnostic_matches = re.findall(r'\[(\w+)\((.*?)\)\]', vendor_sql)
         
         for view_name, raw_args in agnostic_matches:
-            target_method = f"vw_{view_name}_{self.db.vendor.lower()}"
+            target_method_lower = f"vw_{view_name}_{self.db.vendor.lower()}"
+            target_method_upper = f"vw_{view_name}_{self.db.vendor.upper()}"
+            target_method_any = f"vw_{view_name}_any"
+            target_method_ANY = f"vw_{view_name}_ANY"
             found_command = None
             
             # Search db_ objects in Lua global scope
             for key in self.lua.globals():
                 if isinstance(key, str) and key.startswith("db_"):
                     lua_table = self.lua.globals()[key]
-                    if target_method in lua_table:
+                    
+                    method_name = None
+                    if target_method_lower in lua_table:
+                        method_name = target_method_lower
+                    elif target_method_upper in lua_table:
+                        method_name = target_method_upper
+                    elif target_method_any in lua_table:
+                        method_name = target_method_any
+                    elif target_method_ANY in lua_table:
+                        method_name = target_method_ANY
+                        
+                    if method_name:
                         # Parse args into Lua values using a temporary table/expression
                         try:
                             # Use a function call bridge to pass arguments safely
@@ -134,7 +188,7 @@ class LuaEngine:
                                     method_args = [method_args]
                             
                             # Execute the method
-                            lua_table[target_method](lua_table, *method_args)
+                            lua_table[method_name](lua_table, *method_args)
                             found_command = lua_table["command"]
                             break
                         except Exception as e:
@@ -143,10 +197,10 @@ class LuaEngine:
             if found_command:
                 vendor_sql = vendor_sql.replace(f"[{view_name}({raw_args})]", found_command)
             else:
-                raise Exception(f"Agnostic view method '{target_method}' not found in any db_ object.")
+                raise Exception(f"Agnostic view method '{target_method_lower}' (or '{target_method_upper}') not found in any db_ object.")
 
         # 2. Rewrite pseudo views (e.g. <USERS>)
-        vendor_sql = PseudoViews.rewrite(vendor_sql, self.db.vendor)
+        vendor_sql = PseudoViews.rewrite(vendor_sql, self.db.vendor.lower())
 
         # 3. Variable expansion for SQL "IN" clauses
         for var_name in list(params.keys()):
@@ -170,16 +224,26 @@ class LuaEngine:
                 vendor_sql = vendor_sql.replace(f"${var_name}", formatted_list)
                 del params[var_name]
         
-        # 4. Driver-specific placeholders
-        if self.db.vendor == "oracle":
+        # 4. Literal substitution (&var)
+        for var_name in list(params.keys()):
+            if f"&{var_name}" in vendor_sql:
+                val = params[var_name]
+                vendor_sql = vendor_sql.replace(f"&{var_name}", str(val))
+                # If it's not also used as a bind variable ($var), remove from params
+                if f"${var_name}" not in vendor_sql:
+                    del params[var_name]
+        
+        # 5. Driver-specific placeholders
+        vendor_lower = self.db.vendor.lower()
+        if vendor_lower == "oracle":
             vendor_sql = re.sub(r'\$([a-zA-Z_]\w*)', r':\1', vendor_sql)
-        elif self.db.vendor == "postgresql":
+        elif vendor_lower == "postgresql":
             vendor_sql = re.sub(r'\$([a-zA-Z_]\w*)', r'%(\1)s', vendor_sql)
             
-        # 5. Execute
+        # 6. Execute
         results = self.db.execute_query(vendor_sql, params)
         
-        # 6. Handle Save Output
+        # 7. Handle Save Output
         if is_single_value_output:
             if not results or isinstance(results, int):
                 return None

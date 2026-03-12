@@ -82,7 +82,7 @@ class SQLCommanderApp(cmd2.Cmd):
             self.lua_engine.execute_script(content, params)
             self.poutput("Execution completed.")
         except Exception as e:
-            self.perror(f"Error executing script:\\n{e}")
+            self.perror(f"Error executing script:\n{e}")
 
     def do_doc(self, args: cmd2.Statement):
         """Prints the documentation on screen (first multi-line comment) of the Lua script: DOC <script_file.lua>"""

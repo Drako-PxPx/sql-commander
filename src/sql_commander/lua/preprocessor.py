@@ -12,8 +12,8 @@ class LuaPreprocessor:
         re.IGNORECASE
     )
     
-    # Matches: $variable_name
-    VAR_RE = re.compile(r'\$([a-zA-Z_]\w*)')
+    # Matches: $variable_name or &variable_name
+    VAR_RE = re.compile(r'[\$&]([a-zA-Z_]\w*)')
 
     @classmethod
     def process(cls, script_content: str) -> str:
@@ -54,6 +54,24 @@ class LuaPreprocessor:
                 else:
                     processed_lines.append(line)
             else:
-                processed_lines.append(line)
+                # Transpile sql_exists calls if they use literal strings
+                new_line = line
+                # Regex for sql_exists("...") or sql_exists('...')
+                # Using [^"']* to avoid greediness over multiple arguments
+                sql_exists_matches = list(re.finditer(r'sql_exists\s*\(\s*(["\'])(.*?)\1\s*\)', new_line))
+                for match in reversed(sql_exists_matches):
+                    quote = match.group(1)
+                    sql_statement = match.group(2)
+                    
+                    # Find variables ($ or &)
+                    extracted_vars = cls.VAR_RE.findall(sql_statement)
+                    unique_vars = list(dict.fromkeys(extracted_vars))
+                    args_table = "{" + ", ".join(f"{v} = {v}" for v in unique_vars) + "}"
+                    
+                    # Reconstruct the call with the args_table
+                    # We use double quotes for the new call
+                    replacement = f'sql_exists("{sql_statement}", {args_table})'
+                    new_line = new_line[:match.start()] + replacement + new_line[match.end():]
+                processed_lines.append(new_line)
                 
         return '\n'.join(processed_lines)
