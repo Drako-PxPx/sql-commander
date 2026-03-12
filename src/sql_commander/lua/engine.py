@@ -9,11 +9,15 @@ from sql_commander.lua.preprocessor import LuaPreprocessor
 class LuaEngine:
     def __init__(self, db: DBConnection):
         self.db = db
+        self.lua = None
+        # We don't initialize here anymore, we'll do it per execution
+        # to ensure a clean symbol table every time.
+
+    def _init_lua_runtime(self):
+        """Initializes a fresh Lua runtime with all standard bridges."""
         # Set unpack_returned_tuples to true to make function returns cleaner
         self.lua = lupa.LuaRuntime(unpack_returned_tuples=True)
-        self._register_globals()
-
-    def _register_globals(self):
+        
         # Register core bridges
         self.lua.globals()['__sql_execute'] = self.__sql_execute
         self.lua.globals()['__get_vendor'] = lambda: self.db.vendor.lower()
@@ -265,6 +269,9 @@ class LuaEngine:
         return lua_table
 
     def execute_script(self, script_content: str, params: Optional[Dict[str, Any]] = None, script_path: Optional[str] = None):
+        # Always start with a fresh Lua environment to ensure clean symbol table
+        self._init_lua_runtime()
+
         if params:
             for k, v in params.items():
                 val = self._infer_type(v)

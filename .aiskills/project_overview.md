@@ -16,9 +16,17 @@ While this tool accepts standard SQL commands, its primary purpose is to create,
 - **Project manager:** poetry
 
 ## directory structure
-- src/ - the sourcecode of the project, structured as a python project
+## Lua Scripting Runtime Behavior
 
-## Connection & Security
+### Isolated Execution Environment
+To ensure script reliability and prevent side effects, every execution of a Lua script (via the `RUN` command) must operate within a **clean symbol table**.
+- **Memory Isolation:** Variables, functions, and tables defined in one execution must not persist or be accessible in subsequent executions, even if it is the same script being run multiple times.
+- **Orchestrator Integrity:** This isolation is critical for the `db_` pattern orchestrator. The `__newindex` metamethod used to inject the `go()` method only triggers when a key is newly created in the global scope. A dirty symbol table prevents this mechanism from working on script re-runs.
+- **Future-proofing:** While a future "include" feature may allow sharing definitions via specific library loading mechanisms, the default state for any script entry point remains a fully isolated environment.
+
+### Runtime Variables
+The tool provides a global `runtime` table to assist with environmental awareness:
+- `runtime.cwd`: Contains the absolute path to the directory of the currently executing script. This should be used for relative file operations (e.g., `io.open(runtime.cwd .. "/data.csv")`) instead of relying on the process's current working directory.
 The database connection is performed using the CLI command `CONNECT`.
 
 ### Syntax
