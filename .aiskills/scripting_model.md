@@ -124,3 +124,13 @@ When a `SELECT` statement is executed, the results must be mapped into a Lua tab
 - Columns should be accessible by name within each row (dictionary part).
 
 Example access: `print(result[1].username)`
+
+## 5. runtime variables
+
+The `runtime` table is a global table that is populated with the runtime variables that are set in the Lua script.
+
+### Available runtime variables
+
+| Variable Name | Description |
+| :--- | :--- |
+| cwd | current working dir, it should be the same as the current running script |

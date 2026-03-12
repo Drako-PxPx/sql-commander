@@ -1,6 +1,7 @@
 import lupa
 import re
 import json
+import os
 from typing import Optional, Any, Dict
 from sql_commander.db import DBConnection, PseudoViews
 from sql_commander.lua.preprocessor import LuaPreprocessor
@@ -263,7 +264,7 @@ class LuaEngine:
             
         return lua_table
 
-    def execute_script(self, script_content: str, params: Optional[Dict[str, str]] = None):
+    def execute_script(self, script_content: str, params: Optional[Dict[str, Any]] = None, script_path: Optional[str] = None):
         if params:
             for k, v in params.items():
                 val = self._infer_type(v)
@@ -271,6 +272,15 @@ class LuaEngine:
                     self.lua.globals()[k] = self.lua.table_from(val)
                 else:
                     self.lua.globals()[k] = val
+        
+        if script_path:
+            # Ensure 'runtime' table exists in Lua globals
+            if 'runtime' not in self.lua.globals():
+                self.lua.globals()['runtime'] = self.lua.eval("{}")
+            
+            # Set absolute directory of the script
+            abs_path = os.path.abspath(script_path)
+            self.lua.globals()['runtime']['cwd'] = os.path.dirname(abs_path)
                 
         processed = LuaPreprocessor.process(script_content)
         try:

@@ -1,6 +1,7 @@
 from sql_commander.lua.engine import LuaEngine
 from sql_commander.db import DBConnection
 import pytest
+import os
 
 class MockDB(DBConnection):
     def __init__(self, vendor="ORACLE"):
@@ -135,3 +136,15 @@ def test_engine_sql_exists_not_found():
     
     engine.execute_script(script)
     assert engine.lua.globals().is_existing == False
+
+def test_engine_runtime_cwd():
+    db = MockDB("ORACLE")
+    engine = LuaEngine(db)
+    
+    script_path = os.path.abspath("test_dir/script.lua")
+    expected_cwd = os.path.dirname(script_path)
+    
+    script = "my_cwd = runtime.cwd"
+    engine.execute_script(script, script_path=script_path)
+    
+    assert engine.lua.globals().my_cwd == expected_cwd

@@ -79,7 +79,7 @@ class SQLCommanderApp(cmd2.Cmd):
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
             self.poutput(f"Executing script: {file_path}...")
-            self.lua_engine.execute_script(content, params)
+            self.lua_engine.execute_script(content, params, script_path=file_path)
             self.poutput("Execution completed.")
         except Exception as e:
             self.perror(f"Error executing script:\n{e}")
