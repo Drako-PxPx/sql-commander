@@ -62,7 +62,11 @@ class DBConnection:
                 # Client might already be initialized
                 pass
                 
-            self.conn = oracledb.connect(dsn=tns_alias, externalauth=True)
+            # Set externalauth=True only if it doesn't look like a proxy string with a slash
+            if "/" in tns_alias:
+                self.conn = oracledb.connect(dsn=tns_alias)
+            else:
+                self.conn = oracledb.connect(dsn=tns_alias, externalauth=True)
             self.vendor = "ORACLE"
             return True
         except Exception as e:
